@@ -24,7 +24,7 @@ use crate::flow::float::FloatBox;
 use crate::flow::inline::InlineItem;
 use crate::flow::{BlockContainer, BlockFormattingContext, BlockLevelBox};
 use crate::formatting_contexts::IndependentFormattingContext;
-use crate::fragment_tree::FragmentTree;
+use crate::fragment_tree::{BaseFragmentInfo, FragmentTree};
 use crate::geom::{LogicalVec2, PhysicalPoint, PhysicalRect, PhysicalSize};
 use crate::positioned::{AbsolutelyPositionedBox, PositioningContext};
 use crate::replaced::ReplacedContents;
@@ -63,7 +63,8 @@ impl BoxTree {
         // > element to the viewport. The element from which the value is propagated must then have a
         // > used overflow value of visible.
         let root_style = root_element.style(context);
-        let root_overflow = root_style.effective_overflow();
+
+        let root_overflow = root_style.effective_overflow(BaseFragmentInfo::anonymous().flags);
         let mut viewport_overflow = root_overflow;
         if root_overflow.x == Overflow::Visible &&
             root_overflow.y == Overflow::Visible &&
@@ -80,7 +81,8 @@ impl BoxTree {
 
                 let style = child.style(context);
                 if !style.get_box().display.is_none() {
-                    viewport_overflow = style.effective_overflow();
+                    viewport_overflow =
+                        style.effective_overflow(BaseFragmentInfo::anonymous().flags);
                     break;
                 }
             }

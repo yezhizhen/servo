@@ -54,7 +54,7 @@ impl BoxTree {
         // Zero box for `:root { display: none }`, one for the root element otherwise.
         assert!(boxes.len() <= 1);
 
-        // From https://drafts.csswg.org/css-overflow/#overflow-propagation:
+        // From https://www.w3.org/TR/css-overflow-3/#overflow-propagation:
         // > UAs must apply the overflow-* values set on the root element to the viewport when the
         // > root element’s display value is not none. However, when the root element is an [HTML]
         // > html element (including XML syntax for HTML) whose overflow value is visible (in both
@@ -100,8 +100,9 @@ impl BoxTree {
                 contains_floats,
             },
             canvas_background: CanvasBackground::for_root_element(context, root_element),
-            // If visible is applied to the viewport,
-            // it must be interpreted as auto. If clip is applied to the viewport, it must be interpreted as hidden.
+            // From https://www.w3.org/TR/css-overflow-3/#overflow-propagation:
+            // > If visible is applied to the viewport, it must be interpreted as auto.
+            // > If clip is applied to the viewport, it must be interpreted as hidden.
             viewport_scroll_sensitivity: AxesScrollSensitivity {
                 x: viewport_overflow_x.to_scrollable().into(),
                 y: viewport_overflow_y.to_scrollable().into(),

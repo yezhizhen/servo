@@ -500,12 +500,27 @@ impl ComputedValuesExt for ComputedValues {
 
     /// Get the effective overflow of this box. The property only applies to block containers,
     /// flex containers, and grid containers. And some box types only accept a few values.
-    /// fragment_flags for identifying replaced element
     /// <https://www.w3.org/TR/css-overflow-3/#overflow-control>
     fn effective_overflow(&self, fragment_flags: FragmentFlags) -> AxesOverflow {
         let style_box = self.get_box();
         let mut overflow_x = style_box.overflow_x;
         let mut overflow_y = style_box.overflow_y;
+
+        // From <https://www.w3.org/TR/css-overflow-4/#overflow-control>:
+        // "On replaced elements, the used values of all computed values other than visible is clip."
+        if fragment_flags.contains(FragmentFlags::IS_REPLACED) {
+            if overflow_x != Overflow::Visible {
+                overflow_x = Overflow::Clip;
+            }
+            if overflow_y != Overflow::Visible {
+                overflow_y = Overflow::Clip;
+            }
+            return AxesOverflow {
+                x: overflow_x,
+                y: overflow_y,
+            };
+        }
+
         let ignores_overflow = match style_box.display.inside() {
             stylo::DisplayInside::Table => {
                 // According to <https://drafts.csswg.org/css-tables/#global-style-overrides>,
@@ -531,22 +546,13 @@ impl ComputedValuesExt for ComputedValues {
             },
             _ => false,
         };
+
         if ignores_overflow {
             AxesOverflow {
                 x: Overflow::Visible,
                 y: Overflow::Visible,
             }
         } else {
-            // https://www.w3.org/TR/css-overflow-4/#overflow-control
-            // On replaced elements, the used values of all computed values other than visible is clip.
-            if fragment_flags.contains(FragmentFlags::IS_REPLACED) {
-                if overflow_x != Overflow::Visible {
-                    overflow_x = Overflow::Clip;
-                }
-                if overflow_y != Overflow::Visible {
-                    overflow_y = Overflow::Clip;
-                }
-            }
             AxesOverflow {
                 x: overflow_x,
                 y: overflow_y,

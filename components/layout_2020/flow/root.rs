@@ -24,7 +24,7 @@ use crate::flow::float::FloatBox;
 use crate::flow::inline::InlineItem;
 use crate::flow::{BlockContainer, BlockFormattingContext, BlockLevelBox};
 use crate::formatting_contexts::IndependentFormattingContext;
-use crate::fragment_tree::{BaseFragmentInfo, FragmentTree};
+use crate::fragment_tree::FragmentTree;
 use crate::geom::{LogicalVec2, PhysicalPoint, PhysicalRect, PhysicalSize};
 use crate::positioned::{AbsolutelyPositionedBox, PositioningContext};
 use crate::replaced::ReplacedContents;
@@ -64,10 +64,13 @@ impl BoxTree {
         // > used overflow value of visible.
         let root_style = root_element.style(context);
 
-        let root_overflow = root_style.effective_overflow(BaseFragmentInfo::anonymous().flags);
-        let mut viewport_overflow = root_overflow;
-        if root_overflow.x == Overflow::Visible &&
-            root_overflow.y == Overflow::Visible &&
+        let root_overflow_x = root_style.clone_overflow_x();
+        let root_overflow_y = root_style.clone_overflow_y();
+
+        let mut viewport_overflow_x = root_overflow_x;
+        let mut viewport_overflow_y = root_overflow_y;
+        if root_overflow_x == Overflow::Visible &&
+            root_overflow_y == Overflow::Visible &&
             !root_style.get_box().display.is_none()
         {
             for child in iter_child_nodes(root_element) {
@@ -81,8 +84,9 @@ impl BoxTree {
 
                 let style = child.style(context);
                 if !style.get_box().display.is_none() {
-                    viewport_overflow =
-                        style.effective_overflow(BaseFragmentInfo::anonymous().flags);
+                    viewport_overflow_x = style.clone_overflow_x();
+                    viewport_overflow_y = style.clone_overflow_y();
+
                     break;
                 }
             }
@@ -96,9 +100,11 @@ impl BoxTree {
                 contains_floats,
             },
             canvas_background: CanvasBackground::for_root_element(context, root_element),
+            // If visible is applied to the viewport,
+            // it must be interpreted as auto. If clip is applied to the viewport, it must be interpreted as hidden.
             viewport_scroll_sensitivity: AxesScrollSensitivity {
-                x: viewport_overflow.x.to_scrollable().into(),
-                y: viewport_overflow.y.to_scrollable().into(),
+                x: viewport_overflow_x.to_scrollable().into(),
+                y: viewport_overflow_y.to_scrollable().into(),
             },
         }
     }

@@ -444077,7 +444077,7 @@
        []
       ],
       "helper.js": [
-       "a37aae918300d1136debbebbfbb75d46259e0bce",
+       "0ccfe2648ea297fb55360bfa4e47e371a34a7168",
        []
       ],
       "import-green.css": [
@@ -598710,8 +598710,22 @@
        {}
       ]
      ],
+     "transition-remove-and-change-immediate.html": [
+      "66accb9c4cc5805456d82a1f949a082d0205cf6b",
+      [
+       null,
+       {}
+      ]
+     ],
      "transition-reparented.html": [
       "3dfd19425fcaa76051618113bfb4793baf06f364",
+      [
+       null,
+       {}
+      ]
+     ],
+     "transition-zero-duration-with-delay.html": [
+      "18c5d9864cabfa2194b5b7617efeda502924c6e8",
       [
        null,
        {}
@@ -598728,6 +598742,13 @@
      ],
      "transitioncancel-002.html": [
       "e62b17b5dc60ef762e0a0780c967b6e014da5bc9",
+      [
+       null,
+       {}
+      ]
+     ],
+     "transitioncancel-003.html": [
+      "c93e70d0e8cde14026f9da274c9d16f1447131b9",
       [
        null,
        {}

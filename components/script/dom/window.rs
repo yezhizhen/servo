@@ -2289,6 +2289,8 @@ impl Window {
             None,
             can_gc,
         );
+        // Fire Scroll Event
+        node.upcast::<EventTarget>().fire_event(Atom::from("scroll"), can_gc);
     }
 
     pub(crate) fn resolved_style_query(

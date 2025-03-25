@@ -13,6 +13,7 @@ use servo_arc::Arc as ServoArc;
 use style::properties::ComputedValues;
 use style::values::specified::text::TextDecorationLine;
 use webrender_api::{FontInstanceKey, ImageKey};
+use style::Zero;
 
 use super::{
     BaseFragment, BoxFragment, ContainingBlockInfoContext, ContainingBlockManager,

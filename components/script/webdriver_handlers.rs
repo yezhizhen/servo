@@ -409,6 +409,7 @@ pub(crate) fn handle_execute_script(
 ) {
     match window {
         Some(window) => {
+            let _realm = enter_realm(&*window);
             let cx = window.get_cx();
             let realm = AlreadyInRealm::assert_for_cx(cx);
             let realm = InRealm::already(&realm);

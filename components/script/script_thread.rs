@@ -335,6 +335,15 @@ pub struct ScriptThread {
     /// The screen coordinates where the primary mouse button was pressed.
     #[no_trace]
     relative_mouse_down_point: Cell<Point2D<f32, DevicePixel>>,
+
+    #[no_trace]
+    pending_webdriver_script_events: DomRefCell<Vec<WebdriverScriptEvent>>,
+}
+
+struct WebdriverScriptEvent {
+    pub pipeline_id: PipelineId,
+    pub msg: WebDriverScriptCommand,
+    pub can_gc: CanGc,
 }
 
 struct BHMExitSignal {
@@ -956,6 +965,7 @@ impl ScriptThread {
             inherited_secure_context: state.inherited_secure_context,
             layout_factory,
             relative_mouse_down_point: Cell::new(Point2D::zero()),
+            pending_webdriver_script_events: Default::default(),
         }
     }
 
@@ -1058,6 +1068,27 @@ impl ScriptThread {
                     let event = EmbedderMsg::Status(window.webview_id(), None);
                     window.send_to_embedder(event);
                 }
+            }
+        }
+    }
+
+    fn process_pending_webdriver_script_events(&self) {
+        for WebdriverScriptEvent {
+            pipeline_id,
+            msg,
+            can_gc,
+        } in std::mem::take(&mut *self.pending_webdriver_script_events.borrow_mut())
+        {
+            match msg {
+                WebDriverScriptCommand::ExecuteScript(script, reply) => {
+                    let window = self.documents.borrow().find_window(pipeline_id);
+                    webdriver_handlers::handle_execute_script(window, script, reply, can_gc);
+                },
+                WebDriverScriptCommand::ExecuteAsyncScript(script, reply) => {
+                    let window = self.documents.borrow().find_window(pipeline_id);
+                    webdriver_handlers::handle_execute_async_script(window, script, reply, can_gc);
+                },
+                _ => (),
             }
         }
     }
@@ -1284,6 +1315,8 @@ impl ScriptThread {
             // TODO: Process top layer removals according to
             // https://drafts.csswg.org/css-position-4/#process-top-layer-removals.
         }
+
+        self.process_pending_webdriver_script_events();
 
         // Perform a microtask checkpoint as the specifications says that *update the rendering*
         // should be run in a task and a microtask checkpoint is always done when running tasks.
@@ -2093,15 +2126,16 @@ impl ScriptThread {
         // `self.documents`, which would conflict with the immutable borrow of it that
         // occurs for the rest of the messages
         match msg {
-            WebDriverScriptCommand::ExecuteScript(script, reply) => {
-                let window = self.documents.borrow().find_window(pipeline_id);
-                return webdriver_handlers::handle_execute_script(window, script, reply, can_gc);
-            },
-            WebDriverScriptCommand::ExecuteAsyncScript(script, reply) => {
-                let window = self.documents.borrow().find_window(pipeline_id);
-                return webdriver_handlers::handle_execute_async_script(
-                    window, script, reply, can_gc,
-                );
+            WebDriverScriptCommand::ExecuteScript(..) |
+            WebDriverScriptCommand::ExecuteAsyncScript(..) => {
+                self.pending_webdriver_script_events
+                    .borrow_mut()
+                    .push(WebdriverScriptEvent {
+                        pipeline_id,
+                        msg,
+                        can_gc,
+                    });
+                return;
             },
             _ => (),
         }

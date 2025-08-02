@@ -1021,7 +1021,7 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
             .unwrap_or(true)
     }
 
-    // https://html.spec.whatwg.org/multipage/#dom-window-close
+    /// <https://html.spec.whatwg.org/multipage/#dom-window-close>
     fn Close(&self) {
         // Step 1, Let current be this Window object's browsing context.
         // Step 2, If current is null or its is closing is true, then return.
@@ -1074,6 +1074,11 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
                     .task_manager()
                     .dom_manipulation_task_source()
                     .queue(task);
+            } else {
+                // https://developer.mozilla.org/en-US/docs/Web/API/Window/close
+                // "Calling close() otherwise typically shows a console warning:
+                // Scripts may not close windows that were not opened by script."
+                warn!("Scripts may not close windows that were not opened by script.");
             }
         }
     }

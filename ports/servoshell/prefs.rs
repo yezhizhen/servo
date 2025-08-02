@@ -561,6 +561,7 @@ pub(crate) fn parse_command_line_arguments(args: Vec<String>) -> ArgumentParsing
 
     if opt_match.opt_present("webdriver") {
         preferences.dom_testing_html_input_element_select_files_enabled = true;
+        preferences.dom_allow_scripts_to_close_windows = true;
     }
 
     let parse_resolution_string = |string: String| {

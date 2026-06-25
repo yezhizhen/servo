@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use app_units::{Au, MAX_AU};
+use base64::Engine as _;
 use data_url::DataUrl;
 use embedder_traits::ViewportDetails;
 use euclid::{Scale, Size2D};
@@ -29,6 +30,7 @@ use style::values::CSSFloat;
 use style::values::computed::image::Image as ComputedImage;
 use style::values::computed::{Content, Context, ToComputedValue};
 use style::values::generics::counters::{GenericContentItem, GenericContentItems};
+use style_traits::ToCss;
 use url::Url;
 use web_atoms::local_name;
 use webrender_api::ImageKey;
@@ -282,6 +284,26 @@ impl ReplacedContents {
             // had errored, then don't attempt to serialize again.
             Some(svg_source_result) => svg_source_result.ok(),
         };
+
+        // Inject the computed `color` into the SVG data URL so that usvg can
+        // resolve `currentColor` correctly.
+        let svg_source = svg_source.and_then(|svg_source| {
+            let data_url = DataUrl::process(svg_source.as_str()).ok()?;
+            let (svg_bytes, _) = data_url.decode_to_vec().ok()?;
+            let svg_str = std::str::from_utf8(&svg_bytes).ok()?;
+            let gt_pos = svg_str.find('>')?;
+            let style = format!(
+                "<style>*{{color:{}}}</style>",
+                parent_style.clone_color().to_css_string()
+            );
+            let mut modified = String::with_capacity(svg_str.len() + style.len());
+            modified.push_str(&svg_str[..=gt_pos]);
+            modified.push_str(&style);
+            modified.push_str(&svg_str[gt_pos + 1..]);
+
+            let new_base64 = base64::engine::general_purpose::STANDARD.encode(&modified);
+            ServoUrl::parse(&format!("data:image/svg+xml;base64,{}", new_base64)).ok()
+        });
 
         let cached_image = svg_source.and_then(|svg_source| {
             context

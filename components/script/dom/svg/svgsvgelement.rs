@@ -15,7 +15,7 @@ use style::attr::AttrValue;
 use style::parser::ParserContext;
 use style::stylesheets::Origin;
 use style::values::specified::LengthPercentage;
-use style_traits::ParsingMode;
+use style_traits::{ParsingMode, ToCss};
 use uuid::Uuid;
 use xml5ever::serialize::TraversalScope;
 
@@ -89,7 +89,24 @@ impl SVGSVGElement {
         };
 
         let xml_source: String = xml_source.into();
-        let base64_encoded_source = base64::engine::general_purpose::STANDARD.encode(xml_source);
+        // Inject the computed `color` into the SVG source so that usvg can
+        // resolve `currentColor` correctly.
+        // Use style_without_reflow() to avoid infinite reflow(),
+        // as serialize_and_cache_subtree is inside `fn reflow()`.
+        // Soundness: the element was just laid out, and we are post-reflow,
+        // so styles are up-to-date.
+        let gt_pos = xml_source.find('>').unwrap_or(0);
+        let color = self
+            .upcast::<Element>()
+            .style_without_reflow()
+            .map(|s| s.clone_color().to_css_string())
+            .unwrap_or_else(|| String::from("black"));
+        let style = format!("<style>*{{color:{}}}</style>", color);
+        let mut modified = String::with_capacity(xml_source.len() + style.len());
+        modified.push_str(&xml_source[..=gt_pos]);
+        modified.push_str(&style);
+        modified.push_str(&xml_source[gt_pos + 1..]);
+        let base64_encoded_source = base64::engine::general_purpose::STANDARD.encode(modified);
         let data_url = format!("data:image/svg+xml;base64,{}", base64_encoded_source);
         match ServoUrl::parse(&data_url) {
             Ok(url) => *self.cached_serialized_data_url.borrow_mut() = Some(Ok(url)),

@@ -1008,6 +1008,17 @@ impl Element {
         self.style_data.borrow().is_some()
     }
 
+    /// Read the primary computed style without forcing a synchronous style query.
+    /// This is safe ONLY WHEN the caller can guarantee the element's styles are
+    /// already up-to-date, e.g. inside SVG serialization where the element was
+    /// just encountered post-reflow. Use `style()` in all other cases.
+    pub(crate) fn style_without_reflow(&self) -> Option<ServoArc<ComputedValues>> {
+        self.style_data
+            .borrow()
+            .as_ref()
+            .map(|data| data.element_data.borrow().styles.primary().clone())
+    }
+
     pub(crate) fn is_display_none(&self) -> bool {
         self.style_data.borrow().as_ref().is_none_or(|data| {
             data.element_data

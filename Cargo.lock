@@ -8172,6 +8172,7 @@ dependencies = [
  "accesskit",
  "app_units",
  "atomic_refcell",
+ "base64",
  "bitflags 2.13.0",
  "data-url",
  "euclid",

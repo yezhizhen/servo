@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::borrow::ToOwned;
+use std::time::{Duration, Instant};
 use std::{f32, thread};
 
 use crossbeam_channel::{Sender, select, unbounded};
@@ -23,6 +24,11 @@ pub struct CanvasPaintThread {
     canvases: FxHashMap<CanvasId, Canvas>,
     next_canvas_id: CanvasId,
     paint_api: CrossProcessPaintApi,
+    // Profiling accumulators, reset per frame (tracked across UpdateImage boundaries)
+    frame_cmd_time: std::time::Duration,
+    frame_update_time: std::time::Duration,
+    frame_cmd_count: u64,
+    frame_update_count: u64,
 }
 
 impl CanvasPaintThread {
@@ -31,6 +37,10 @@ impl CanvasPaintThread {
             canvases: FxHashMap::default(),
             next_canvas_id: CanvasId(0),
             paint_api,
+            frame_cmd_time: Duration::ZERO,
+            frame_update_time: Duration::ZERO,
+            frame_cmd_count: 0,
+            frame_update_count: 0,
         }
     }
 
@@ -104,6 +114,7 @@ impl CanvasPaintThread {
         fields(message = message.to_string())
     )]
     fn process_command(&mut self, message: CanvasCommand, canvas_id: CanvasId) {
+        let cmd_start = Instant::now();
         match message {
             CanvasCommand::Recreate(size) => self.canvas(canvas_id).recreate(size),
             CanvasCommand::Destroy => {
@@ -287,15 +298,37 @@ impl CanvasPaintThread {
                     .put_image_data(snapshot.to_owned(), rect);
             },
             CanvasCommand::UpdateImage(canvas_epoch) => {
+                let update_start = Instant::now();
                 self.canvas(canvas_id).update_image_rendering(canvas_epoch);
+                let update_elapsed = update_start.elapsed();
+                self.frame_update_time += update_elapsed;
+                self.frame_update_count += 1;
+
+                // Print frame timing summary
+                log::error!(
+                    "[profile] frame {cmd_count}: {total_us:?} cmd | {update:?} update ({pct:.0}%) | {ncmd} cmds",
+                    cmd_count = self.frame_update_count,
+                    total_us = self.frame_cmd_time + self.frame_update_time,
+                    update = self.frame_update_time,
+                    pct = self.frame_update_time.as_secs_f64() / (self.frame_cmd_time + self.frame_update_time).as_secs_f64() * 100.0,
+                    ncmd = self.frame_cmd_count,
+                );
+                self.frame_cmd_time = Duration::ZERO;
+                self.frame_update_time = Duration::ZERO;
+                self.frame_cmd_count = 0;
             },
             CanvasCommand::PopClips(clips) => self.canvas(canvas_id).pop_clips(clips),
             CanvasCommand::ProcessBatchMessages(messages) => {
+                // Individual commands inside the batch are timed by their own
+                // process_command calls, so we don't accumulate here.
                 for message in messages {
                     self.process_command(message, canvas_id);
                 }
+                return;
             },
         }
+        self.frame_cmd_time += cmd_start.elapsed();
+        self.frame_cmd_count += 1;
     }
 
     fn canvas(&mut self, canvas_id: CanvasId) -> &mut Canvas {

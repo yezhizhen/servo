@@ -6,6 +6,8 @@ use std::cell::Cell;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use app_units::Au;
 use cssparser::color::clamp_unit_f32;
@@ -192,6 +194,11 @@ impl CanvasContextState {
     }
 }
 
+// Script-side profiling accumulators (reset per frame in update_rendering)
+static SCRIPT_CMD_TIME_US: AtomicU64 = AtomicU64::new(0);
+static SCRIPT_CMD_COUNT: AtomicU64 = AtomicU64::new(0);
+static SCRIPT_UPDATE_TIME_US: AtomicU64 = AtomicU64::new(0);
+
 #[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
 #[derive(JSTraceable, MallocSizeOf)]
 pub(super) struct CanvasState {
@@ -290,7 +297,11 @@ impl CanvasState {
         if !self.is_paintable() {
             return;
         }
+        let start = Instant::now();
         self.buffered_sender.send(msg).unwrap();
+        let elapsed = start.elapsed();
+        SCRIPT_CMD_TIME_US.fetch_add(elapsed.as_micros() as u64, Ordering::Relaxed);
+        SCRIPT_CMD_COUNT.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Send a canvas command immediately.
@@ -301,7 +312,11 @@ impl CanvasState {
         if !self.is_paintable() {
             self.buffered_sender.flush().unwrap();
         } else {
+            let start = Instant::now();
             self.buffered_sender.send_immediate(msg).unwrap();
+            let elapsed = start.elapsed();
+            SCRIPT_CMD_TIME_US.fetch_add(elapsed.as_micros() as u64, Ordering::Relaxed);
+            SCRIPT_CMD_COUNT.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -311,7 +326,29 @@ impl CanvasState {
             return false;
         }
 
+        let update_start = Instant::now();
         self.send_canvas_command_immediate(CanvasCommand::UpdateImage(canvas_epoch));
+        let update_elapsed = update_start.elapsed();
+        SCRIPT_UPDATE_TIME_US.fetch_add(update_elapsed.as_micros() as u64, Ordering::Relaxed);
+
+        // Print script-side timing summary
+        let total_cmd_us = SCRIPT_CMD_TIME_US.load(Ordering::Relaxed);
+        let total_update_us = SCRIPT_UPDATE_TIME_US.load(Ordering::Relaxed);
+        let ncmd = SCRIPT_CMD_COUNT.load(Ordering::Relaxed);
+        log::error!(
+            "[script] frame: {total_us}µs cmd | {update_us}µs update ({pct:.0}%) | {ncmd} cmds | avg {avg_us}µs/cmd",
+            total_us = total_cmd_us,
+            update_us = total_update_us,
+            pct = if total_cmd_us + total_update_us > 0 {
+                total_update_us as f64 / (total_cmd_us + total_update_us) as f64 * 100.0
+            } else { 0.0 },
+            ncmd = ncmd,
+            avg_us = if ncmd > 0 { total_cmd_us / ncmd } else { 0 },
+        );
+
+        SCRIPT_CMD_TIME_US.store(0, Ordering::Relaxed);
+        SCRIPT_CMD_COUNT.store(0, Ordering::Relaxed);
+        SCRIPT_UPDATE_TIME_US.store(0, Ordering::Relaxed);
         true
     }
 

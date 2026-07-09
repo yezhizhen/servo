@@ -325,6 +325,7 @@ impl GenericDrawTarget for VelloCPUDrawTarget {
                         .ctx
                         .glyph_run(&mut self_.resources, font)
                         .font_size(text_run.pt_size)
+                        .atlas_cache(true)
                         .fill_glyphs(text_run.glyphs_and_positions.iter().map(
                             |glyph_and_position| vello_cpu::Glyph {
                                 id: glyph_and_position.id,
@@ -432,6 +433,7 @@ impl GenericDrawTarget for VelloCPUDrawTarget {
                         .ctx
                         .glyph_run(&mut self_.resources, font)
                         .font_size(text_run.pt_size)
+                        .atlas_cache(true)
                         .stroke_glyphs(text_run.glyphs_and_positions.iter().map(
                             |glyph_and_position| vello_cpu::Glyph {
                                 id: glyph_and_position.id,

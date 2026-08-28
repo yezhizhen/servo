@@ -65,42 +65,77 @@ pub struct AxesScrollSensitivity {
 }
 
 /// A simplified representation of the CSS `touch-action` property, used by the
-/// compositor to decide how a touch gesture may scroll a given node.
+/// compositor to decide how a touch gesture may scroll or zoom a given node.
+///
+/// This is a bitflags value mirroring (a subset of) Stylo's own
+/// [`style::values::specified::TouchAction`], so that the `pinch-zoom` keyword
+/// is preserved independently of the pan axes:
+/// - `auto` / `manipulation` / `pan-x pan-y pinch-zoom` → [`Self::Auto`]
+///   (all bits set: both pan axes and pinch-zoom).
+/// - `none` → [`Self::empty()`] (no bits set: no panning, no pinch-zoom).
+/// - `pan-x` → [`Self::PanX`] only (horizontal pan, *no* pinch-zoom).
+/// - `pan-y` → [`Self::PanY`] only (vertical pan, *no* pinch-zoom).
+/// - `pinch-zoom` → [`Self::PinchZoom`] only (no panning, pinch-zoom allowed).
+/// - `pan-x pinch-zoom` / `pan-y pinch-zoom` → the corresponding combination.
 ///
 /// NOTE: Directional variants (`pan-left`/`pan-right`/...) are not supported in Stylo at all.
 /// Firefox also fails the parsing.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, MallocSizeOf, PartialEq, Serialize)]
-pub enum TouchAction {
-    /// `touch-action: auto` (and `manipulation`, `pan-x pan-y`). The compositor
-    /// applies the scroll-chaining axis lock: lock to the dominant axis only
-    /// when the hit node cannot scroll that axis.
-    Auto,
-    /// `touch-action: pan-x`. The vertical axis is excluded from input-event
-    /// scrolling (chains to ancestor); the gesture locks to its dominant axis.
-    PanX,
-    /// `touch-action: pan-y`. The horizontal axis is excluded from input-event
-    /// scrolling (chains to ancestor); the gesture locks to its dominant axis.
-    PanY,
-    /// `touch-action: none` (and `pinch-zoom` alone). No single-finger direct
-    /// manipulation: do not scroll.
-    None,
+pub struct TouchAction(u8);
+
+bitflags! {
+    impl TouchAction: u8 {
+        /// `touch-action: pan-x`. Horizontal single-finger panning is allowed.
+        const PanX = 1 << 0;
+        /// `touch-action: pan-y`. Vertical single-finger panning is allowed.
+        const PanY = 1 << 1;
+        /// `touch-action: pinch-zoom`. Multi-finger pinch-zoom is allowed.
+        const PinchZoom = 1 << 2;
+        /// Alias for the "everything allowed" value: `touch-action: auto`,
+        /// `manipulation`, and `pan-x pan-y pinch-zoom` all map to this.
+        const Auto = Self::PanX.bits() | Self::PanY.bits() | Self::PinchZoom.bits();
+    }
+}
+
+impl TouchAction {
+    /// Whether pinch-zoom is allowed by this `touch-action` value. `pinch-zoom`
+    /// is only enabled by the `pinch-zoom` keyword itself, or by `auto` /
+    /// `manipulation` (which both expand to include it).
+    ///
+    /// This is consulted by the touch handler when a two-finger pinch gesture
+    /// begins, so that values without `pinch-zoom` (e.g. `none`, `pan-x`,
+    /// `pan-y`, `pan-x pan-y`) suppress pinch-zoom rather than always zooming.
+    pub fn allows_pinch_zoom(self) -> bool {
+        self.contains(Self::PinchZoom)
+    }
 }
 
 impl From<style::values::specified::TouchAction> for TouchAction {
     fn from(stylo: style::values::specified::TouchAction) -> Self {
         use style::values::specified::TouchAction as T;
+        // `touch-action: none` disables all direct manipulation (pan + zoom).
         if stylo.contains(T::NONE) {
-            return TouchAction::None;
+            return TouchAction::empty();
         }
+        // `auto` / `manipulation` enable all panning axes and pinch-zoom.
         if stylo.contains(T::AUTO) || stylo.contains(T::MANIPULATION) {
             return TouchAction::Auto;
         }
-        match (stylo.contains(T::PAN_X), stylo.contains(T::PAN_Y)) {
-            (true, true) => TouchAction::Auto,
-            (true, false) => TouchAction::PanX,
-            (false, true) => TouchAction::PanY,
-            (false, false) => TouchAction::None,
+        // Otherwise, assemble the allowed behaviors from the individual bits.
+        // Note that `pan-x pan-y` (without `pinch-zoom`) does NOT enable
+        // pinch-zoom — only `auto`/`manipulation`/an explicit `pinch-zoom`
+        // keyword do.
+        let mut touch_action = TouchAction::empty();
+        if stylo.contains(T::PAN_X) {
+            touch_action |= TouchAction::PanX;
         }
+        if stylo.contains(T::PAN_Y) {
+            touch_action |= TouchAction::PanY;
+        }
+        if stylo.contains(T::PINCH_ZOOM) {
+            touch_action |= TouchAction::PinchZoom;
+        }
+        touch_action
     }
 }
 

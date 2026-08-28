@@ -137,17 +137,25 @@ impl PanPolicyInput {
     /// Decide the [`PanPolicy`] for a gesture with the given dominant axis.
     /// See the policy table documented on [`PanPolicy`].
     fn to_pan_policy(self, dominant: PanAxis) -> PanPolicy {
-        match self.touch_action {
-            TouchAction::None => PanPolicy::NoScroll,
-            TouchAction::PanX | TouchAction::PanY => PanPolicy::Lock(dominant),
-            TouchAction::Auto => {
-                if self.scrollable_x && self.scrollable_y {
-                    PanPolicy::Free
-                } else {
-                    PanPolicy::Lock(dominant)
-                }
-            },
+        // Only the pan bits govern single-finger panning; the `pinch-zoom` bit
+        // is handled separately when a two-finger gesture begins.
+        let pan = self.touch_action & (TouchAction::PanX | TouchAction::PanY);
+        // `none`, `pinch-zoom` alone, or any value without a pan bit: no
+        // single-finger direct manipulation.
+        if pan.is_empty() {
+            return PanPolicy::NoScroll;
         }
+        // `auto`/`manipulation`/`pan-x pan-y` (both pan bits): allow free 2D
+        // panning when the hit node can scroll both axes, otherwise lock to the
+        // gesture's dominant axis (scroll-chaining lock).
+        if pan.contains(TouchAction::PanX) && pan.contains(TouchAction::PanY) {
+            if self.scrollable_x && self.scrollable_y {
+                return PanPolicy::Free;
+            }
+            return PanPolicy::Lock(dominant);
+        }
+        // `pan-x` or `pan-y`: lock to the gesture's dominant axis.
+        PanPolicy::Lock(dominant)
     }
 }
 
@@ -617,9 +625,21 @@ impl TouchHandler {
                 }
             },
             2 => {
-                if touch_sequence.state == Pinching ||
-                    delta.x.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale ||
-                    delta.y.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale
+                // `touch-action` governs direct touch manipulation, so a
+                // two-finger pinch-zoom is only performed when the hit node's
+                // `touch-action` allows `pinch-zoom` (i.e. `auto`/`manipulation`,
+                // `pinch-zoom`, or `pan-x`/`pan-y` combined with `pinch-zoom`).
+                // Values without `pinch-zoom` (e.g. `none`, `pan-x`, `pan-y`,
+                // `pan-x pan-y`) suppress the zoom entirely. A missed down
+                // hit-test defaults to allowed, matching the `Undetermined`
+                // fallback used for panning.
+                let pinch_zoom_allowed = touch_sequence
+                    .pan_policy_input
+                    .is_none_or(|input| input.touch_action.allows_pinch_zoom());
+                if pinch_zoom_allowed &&
+                    (touch_sequence.state == Pinching ||
+                        delta.x.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale ||
+                        delta.y.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale)
                 {
                     touch_sequence.state = Pinching;
                     let (d0, _) = touch_sequence.pinch_distance_and_center();
@@ -629,9 +649,14 @@ impl TouchHandler {
                     let (d1, c1) = touch_sequence.pinch_distance_and_center();
 
                     Some(ScrollZoomEvent::PinchZoom(d1 / d0, c1))
-                } else {
+                } else if pinch_zoom_allowed {
                     // We don't update the touchpoint, so multiple small moves can
                     // accumulate and merge into a larger move.
+                    None
+                } else {
+                    // Pinch-zoom is disallowed: keep the touch point fresh but
+                    // never transition to `Pinching` or emit a zoom event.
+                    touch_sequence.active_touch_points[idx].point = point;
                     None
                 }
             },

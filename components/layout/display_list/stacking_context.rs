@@ -1056,19 +1056,15 @@ impl BoxFragmentWithStyle<'_> {
         let touch_action = TouchAction::from(style.get_box().touch_action);
         // `touch-action` only restricts direct touch manipulation; mouse wheel
         // (`InputEvents`) and script-driven scrolling are unaffected, so we only
-        // strip `ScrollType::Touch` from the excluded axis.
-        match touch_action {
-            TouchAction::PanX => {
-                y_sensitivity.remove(ScrollType::Touch);
-            },
-            TouchAction::PanY => {
-                x_sensitivity.remove(ScrollType::Touch);
-            },
-            TouchAction::None => {
-                x_sensitivity.remove(ScrollType::Touch);
-                y_sensitivity.remove(ScrollType::Touch);
-            },
-            TouchAction::Auto => {},
+        // strip `ScrollType::Touch` from an axis that the value disallows.
+        // `pan-x`/`pan-y` keep their named axis and strip the other; `none`
+        // strips both; `auto` (and `manipulation`) strip neither. The
+        // `pinch-zoom` bit is handled separately by the touch handler.
+        if !touch_action.contains(TouchAction::PanY) {
+            y_sensitivity.remove(ScrollType::Touch);
+        }
+        if !touch_action.contains(TouchAction::PanX) {
+            x_sensitivity.remove(ScrollType::Touch);
         }
         let sensitivity = AxesScrollSensitivity {
             x: x_sensitivity,

@@ -416,6 +416,35 @@ impl DocumentEventHandler {
             }));
     }
 
+    pub(crate) fn discard_pending_input_events(&self) {
+        *self.mouse_move_event_index.borrow_mut() = None;
+        *self.wheel_event_index.borrow_mut() = None;
+
+        let input_event_outcomes: Vec<InputEventOutcome> =
+            mem::take(&mut *self.pending_input_events.borrow_mut())
+                .into_iter()
+                .map(|event| event.event.id)
+                .chain(mem::take(
+                    &mut *self.coalesced_mouse_move_event_ids.borrow_mut(),
+                ))
+                .chain(mem::take(&mut *self.coalesced_wheel_event_ids.borrow_mut()))
+                .map(|id| InputEventOutcome {
+                    id,
+                    result: InputEventResult::default(),
+                })
+                .collect();
+
+        if input_event_outcomes.is_empty() {
+            return;
+        }
+
+        self.window
+            .send_to_embedder(EmbedderMsg::InputEventsHandled(
+                self.window.webview_id(),
+                input_event_outcomes,
+            ));
+    }
+
     /// When an event should be fired on the element that has focus, this returns the target. If
     /// there is no associated element with the focused area (such as when the viewport is focused),
     /// then the body is returned. If no body is returned then the `Window` is returned.

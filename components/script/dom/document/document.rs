@@ -2833,6 +2833,7 @@ impl Document {
     /// <https://html.spec.whatwg.org/multipage/#destroy-a-document>
     pub(crate) fn destroy(&self, cx: &mut JSContext) {
         let exited_window = self.window();
+        self.event_handler.discard_pending_input_events();
         // Step 2. Abort document.
         self.abort(cx);
         // Step 3. Set document's salvageable state to false.

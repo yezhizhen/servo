@@ -1005,6 +1005,7 @@ impl ScriptThread {
         // Do not handle events if the BC has been, or is being, discarded
         if document.window().Closed() {
             warn!("Input event sent to a pipeline with a closed window {pipeline_id}.");
+            document.event_handler().discard_pending_input_events();
             return;
         }
         if !document.event_handler().has_pending_input_events() {
@@ -3170,6 +3171,8 @@ impl ScriptThread {
         // to prevent any further incoming networking messages from being handled.
         let document = self.documents.borrow_mut().remove(pipeline_id);
         if let Some(document) = document {
+            document.event_handler().discard_pending_input_events();
+
             // We should never have a pipeline that's still an incomplete load, but also has a Document.
             debug_assert!(
                 !self

@@ -2909,11 +2909,11 @@ def getAllTypes(
         t = t.unroll()
         if t.isRecord():
             # pyrefly: ignore  # missing-attribute
-            yield (t.inner, d)
+            yield (t.inner, descriptor)
         elif t.isUnion():
             for contained in t.flatMemberTypes:
                 yield from handleContainedTypes(contained, None)
-        yield (t, d)
+        yield (t, descriptor)
     for d in descriptors:
         for t in getTypesFromDescriptor(d):
             yield from handleContainedTypes(t, d)

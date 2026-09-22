@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::default::Default;
+use std::f64::consts::{FRAC_PI_2, PI};
 use std::str::FromStr;
 
 use euclid::Angle;
@@ -30,6 +31,15 @@ impl MallocSizeOf for Path {
 }
 
 pub struct IndexSizeError;
+
+/// A single corner radius used by [`Path::round_rect`], expressed as an (x, y) pair.
+#[derive(Clone, Copy, Debug)]
+pub struct RoundRectRadius {
+    pub x: f64,
+    pub y: f64,
+}
+
+pub struct RangeError;
 
 impl Path {
     pub fn new() -> Self {
@@ -355,6 +365,120 @@ impl Path {
 
         // Step 4. Create a new subpath with the point (x, y) as the only point in the subpath.
         self.0.move_to((x, y));
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#dom-context-2d-roundrect>
+    pub fn round_rect(
+        &mut self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        radii: &[RoundRectRadius],
+    ) -> Result<(), RangeError> {
+        // Step 1. If any of x, y, w, or h are infinite or NaN, then return.
+        if !(x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite()) {
+            return Ok(());
+        }
+
+        // Step 3. If radii is not a list of size one, two, three, or four, then throw a
+        // RangeError.
+        if radii.is_empty() || radii.len() > 4 {
+            return Err(RangeError);
+        }
+
+        // Steps 4-5. If any radius is infinite or NaN, then return; if any radius is negative,
+        // then throw a RangeError.
+        for radius in radii {
+            if !(radius.x.is_finite() && radius.y.is_finite()) {
+                return Ok(());
+            }
+            if radius.x < 0.0 || radius.y < 0.0 {
+                return Err(RangeError);
+            }
+        }
+
+        // Steps 6-10. Assign upperLeft, upperRight, lowerRight and lowerLeft.
+        let (mut upper_left, mut upper_right, mut lower_right, mut lower_left) = match radii {
+            [a] => (*a, *a, *a, *a),
+            [a, b] => (*a, *b, *a, *b),
+            [a, b, c] => (*a, *b, *c, *b),
+            [a, b, c, d] => (*a, *b, *c, *d),
+            _ => unreachable!(),
+        };
+
+        // Step 11. Corner curves must not overlap. Scale all radii to prevent this.
+        let top = upper_left.x + upper_right.x;
+        let right = upper_right.y + lower_right.y;
+        let bottom = lower_right.x + lower_left.x;
+        let left = upper_left.y + lower_left.y;
+        let scale = (w / top).min(h / right).min(w / bottom).min(h / left);
+        if scale < 1.0 {
+            upper_left.x *= scale;
+            upper_left.y *= scale;
+            upper_right.x *= scale;
+            upper_right.y *= scale;
+            lower_right.x *= scale;
+            lower_right.y *= scale;
+            lower_left.x *= scale;
+            lower_left.y *= scale;
+        }
+
+        // Step 12. Create a new subpath.
+        self.0.move_to((x + upper_left.x, y));
+        self.0.line_to((x + w - upper_right.x, y));
+        self.round_rect_arc(
+            x + w - upper_right.x,
+            y + upper_right.y,
+            upper_right.x,
+            upper_right.y,
+            -FRAC_PI_2,
+        );
+        self.0.line_to((x + w, y + h - lower_right.y));
+        self.round_rect_arc(
+            x + w - lower_right.x,
+            y + h - lower_right.y,
+            lower_right.x,
+            lower_right.y,
+            0.0,
+        );
+        self.0.line_to((x + lower_left.x, y + h));
+        self.round_rect_arc(
+            x + lower_left.x,
+            y + h - lower_left.y,
+            lower_left.x,
+            lower_left.y,
+            FRAC_PI_2,
+        );
+        self.0.line_to((x, y + upper_left.y));
+        self.round_rect_arc(
+            x + upper_left.x,
+            y + upper_left.y,
+            upper_left.x,
+            upper_left.y,
+            PI,
+        );
+
+        // Step 13. Mark the subpath as closed.
+        self.0.close_path();
+
+        // Step 14. Create a new subpath with the point (x, y) as the only point in the subpath.
+        self.0.move_to((x, y));
+
+        Ok(())
+    }
+
+    /// Appends a quarter arc, sweeping clockwise by [`FRAC_PI_2`], for a `roundRect` corner.
+    fn round_rect_arc(&mut self, cx: f64, cy: f64, rx: f64, ry: f64, start_angle: f64) {
+        let arc = kurbo::Arc::new((cx, cy), (rx, ry), start_angle, FRAC_PI_2, 0.0);
+        let mut iter = arc.path_elements(0.01);
+        // `path_elements` starts with a `MoveTo` at the arc's start point, which is already the
+        // current point of the subpath, so consume it and connect the rest.
+        let Some(PathEl::MoveTo(start_point)) = iter.next() else {
+            return;
+        };
+        self.0.line_to((start_point.x, start_point.y));
+        self.0.extend(iter);
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-context-2d-ispointinpath>

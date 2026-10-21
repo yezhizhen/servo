@@ -482,7 +482,7 @@ impl FlexContainer {
         // > 1. For each flex item, subtract its outer flex base size from its max-content
         // > contribution size.
         let mut chosen_max_flex_fraction = f32::NEG_INFINITY;
-        let mut chosen_min_flex_fraction = f32::NEG_INFINITY;
+        let mut chosen_min_flex_fraction = f32::INFINITY;
         let mut sum_of_flex_grow_factors = 0.0;
         let mut sum_of_flex_shrink_factors = 0.0;
         let mut item_infos = vec![];
@@ -508,7 +508,7 @@ impl FlexContainer {
                     chosen_max_flex_fraction =
                         chosen_max_flex_fraction.max(info.max_flex_factors.desired_flex_fraction);
                     chosen_min_flex_fraction =
-                        chosen_min_flex_fraction.max(info.min_flex_factors.desired_flex_fraction);
+                        chosen_min_flex_fraction.min(info.min_flex_factors.desired_flex_fraction);
 
                     item_infos.push(info)
                 },

@@ -496,6 +496,9 @@ pub struct Constellation<STF, SWF> {
     /// Navigation requests from script awaiting approval from the embedder.
     pending_approval_navigations: PendingApprovalNavigations,
 
+    /// WebDriver script commands waiting for the document in their browsing context to load.
+    pending_webdriver_script_commands: FxHashMap<BrowsingContextId, Vec<WebDriverScriptCommand>>,
+
     /// Bitmask which indicates which combination of mouse buttons are
     /// currently being pressed.
     pressed_mouse_buttons: MouseButtons,
@@ -753,6 +756,7 @@ where
                     webxr_registry: state.webxr_registry,
                     canvas: OnceCell::new(),
                     pending_approval_navigations: Default::default(),
+                    pending_webdriver_script_commands: Default::default(),
                     pressed_mouse_buttons: MouseButtons::empty(),
                     active_keyboard_modifiers: Modifiers::empty(),
                     hard_fail,
@@ -4455,6 +4459,9 @@ where
                 &self.pipelines,
             );
         };
+
+        // The aborted navigation no longer blocks commands for its browsing context.
+        self.flush_pending_webdriver_script_commands(change.browsing_context_id);
     }
 
     #[servo_tracing::instrument(skip_all)]
@@ -4466,17 +4473,28 @@ where
     ) {
         debug!("Load finished in {pipeline_id:?} aborted={aborted}");
 
-        if !aborted && let Some(pipeline) = self.pipelines.get_mut(&pipeline_id) {
-            pipeline.completely_loaded = true;
-        }
+        let pipeline_browsing_context_id = self.pipelines.get_mut(&pipeline_id).map(|pipeline| {
+            if !aborted {
+                pipeline.completely_loaded = true;
+            }
+            pipeline.load_finished = true;
+            pipeline.browsing_context_id
+        });
 
         // We need to make sure the pipeline that has finished loading is the current
         // pipeline and that no pending pipeline will replace the current one.
+        let browsing_context_id = BrowsingContextId::from(webview_id);
         let pipeline_is_top_level_pipeline = self
             .browsing_contexts
-            .get(&BrowsingContextId::from(webview_id))
+            .get(&browsing_context_id)
             .is_some_and(|ctx| ctx.pipeline_id == pipeline_id);
-        if pipeline_is_top_level_pipeline {
+        if !pipeline_is_top_level_pipeline {
+            self.handle_subframe_load_finished(pipeline_id, aborted);
+        } else if !self.webviews.get(&webview_id).is_some_and(|webview| {
+            webview.has_pending_change_for_browsing_context_id(browsing_context_id)
+        }) {
+            // A pending navigation reports its own status when it is done, so do not let
+            // the load of the document it replaces end its wait early.
             self.send_webdriver_load_status(
                 webview_id,
                 if aborted {
@@ -4485,8 +4503,10 @@ where
                     WebDriverLoadStatus::Complete
                 },
             );
-        } else {
-            self.handle_subframe_load_finished(pipeline_id, aborted);
+        }
+
+        if let Some(browsing_context_id) = pipeline_browsing_context_id {
+            self.flush_pending_webdriver_script_commands(browsing_context_id);
         }
     }
 
@@ -4933,6 +4953,9 @@ where
             );
             self.send_message_to_pipeline(parent_pipeline_id, msg, "Child traversed after closure");
         }
+
+        // Activating an already loaded document can unblock pending commands.
+        self.flush_pending_webdriver_script_commands(browsing_context_id);
 
         None
     }
@@ -5398,6 +5421,52 @@ where
         self.send_message_to_pipeline(pipeline_id, control_msg, "ScriptCommand after closure");
     }
 
+    /// Whether the browsing context's document is ready to run WebDriver commands.
+    fn browsing_context_is_ready_for_webdriver_commands(
+        &self,
+        browsing_context_id: BrowsingContextId,
+    ) -> bool {
+        let Some(browsing_context) = self.browsing_contexts.get(&browsing_context_id) else {
+            return false;
+        };
+        let Some(pipeline) = self.pipelines.get(&browsing_context.pipeline_id) else {
+            return false;
+        };
+        if !pipeline.load_finished {
+            return false;
+        }
+        self.webviews
+            .get(&browsing_context.webview_id)
+            .is_some_and(|webview| {
+                !webview.has_pending_change_for_browsing_context_id(browsing_context_id)
+            })
+    }
+
+    /// Whether the script command depends on the state of the active document.
+    fn script_command_requires_loaded_document(cmd: &WebDriverScriptCommand) -> bool {
+        !matches!(
+            cmd,
+            WebDriverScriptCommand::SetProtocolHandlerAutomationMode(..) |
+                WebDriverScriptCommand::SetPermission(..)
+        )
+    }
+
+    /// Dispatch queued commands if the browsing context is now ready.
+    fn flush_pending_webdriver_script_commands(&mut self, browsing_context_id: BrowsingContextId) {
+        if !self.browsing_context_is_ready_for_webdriver_commands(browsing_context_id) {
+            return;
+        }
+        let Some(commands) = self
+            .pending_webdriver_script_commands
+            .remove(&browsing_context_id)
+        else {
+            return;
+        };
+        for cmd in commands {
+            self.dispatch_webdriver_script_command(browsing_context_id, cmd);
+        }
+    }
+
     #[servo_tracing::instrument(skip_all)]
     fn handle_webdriver_msg(&mut self, msg: WebDriverCommandMsg) {
         // Find the script channel for the given parent pipeline,
@@ -5426,6 +5495,20 @@ where
             },
             // TODO: This should use the ScriptThreadMessage::EvaluateJavaScript command
             WebDriverCommandMsg::ScriptCommand(browsing_context_id, cmd) => {
+                if !self.browsing_contexts.contains_key(&browsing_context_id) {
+                    return warn!("{}: Browsing context is not ready", browsing_context_id);
+                }
+                // Commands must not run in a document that is still loading. The server
+                // normally waits for that, but a navigation can start after its check.
+                if Self::script_command_requires_loaded_document(&cmd) &&
+                    !self.browsing_context_is_ready_for_webdriver_commands(browsing_context_id)
+                {
+                    self.pending_webdriver_script_commands
+                        .entry(browsing_context_id)
+                        .or_default()
+                        .push(cmd);
+                    return;
+                }
                 self.dispatch_webdriver_script_command(browsing_context_id, cmd);
             },
             WebDriverCommandMsg::CloseWebView(..) |
@@ -5869,6 +5952,7 @@ where
             let _ = parent_pipeline.event_loop.send(msg);
         }
 
+        let browsing_context_id = change.browsing_context_id;
         self.change_session_history(change);
 
         if let Some(webview) = self.webviews.get_mut(&webview_id) {
@@ -5877,6 +5961,9 @@ where
                 &self.pipelines,
             );
         }
+
+        // `about:blank` is ready as soon as it is activated, unlike other documents.
+        self.flush_pending_webdriver_script_commands(browsing_context_id);
     }
 
     /// Called when the window is resized.
@@ -6066,6 +6153,10 @@ where
     ) -> Option<BrowsingContext> {
         debug!("{}: Closing", browsing_context_id);
 
+        // Commands waiting for this browsing context can never be dispatched.
+        self.pending_webdriver_script_commands
+            .remove(&browsing_context_id);
+
         self.close_browsing_context_children(
             webview_id,
             browsing_context_id,
@@ -6183,6 +6274,8 @@ where
     fn unload_document(&mut self, pipeline_id: PipelineId) {
         if let Some(pipeline) = self.pipelines.get_mut(&pipeline_id) {
             pipeline.set_has_active_document(false);
+            // The document will never finish loading now, so commands must not wait for it.
+            pipeline.load_finished = true;
             let _ = pipeline
                 .event_loop
                 .send(ScriptThreadMessage::UnloadDocument(pipeline_id));

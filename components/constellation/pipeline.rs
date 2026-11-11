@@ -70,6 +70,9 @@ pub struct Pipeline {
     /// Has this pipeline received a notification that it is completely loaded?
     pub completely_loaded: bool,
 
+    /// Whether the document has finished loading, successfully or not.
+    pub load_finished: bool,
+
     /// The title of this pipeline's document.
     pub title: String,
 
@@ -121,6 +124,7 @@ impl Pipeline {
         webview_hidden: bool,
         load_data: LoadData,
     ) -> Self {
+        let is_initial_about_blank = load_data.is_initial_about_blank;
         let pipeline = Self {
             id,
             browsing_context_id,
@@ -137,6 +141,7 @@ impl Pipeline {
             load_data,
             history_state_id: None,
             completely_loaded: false,
+            load_finished: is_initial_about_blank,
             title: String::new(),
             focus_sequence: FocusSequenceNumber::default(),
             // Assume that every new Pipeline has an active document until told otherwise.

@@ -310,6 +310,15 @@ impl ConstellationWebView {
         !self.pending_changes.is_empty()
     }
 
+    pub(crate) fn has_pending_change_for_browsing_context_id(
+        &self,
+        browsing_context_id: BrowsingContextId,
+    ) -> bool {
+        self.pending_changes
+            .iter()
+            .any(|pending_change| pending_change.browsing_context_id == browsing_context_id)
+    }
+
     pub(crate) fn pipeline_is_pending(&self, pipeline_id: PipelineId) -> bool {
         self.pending_changes
             .iter()

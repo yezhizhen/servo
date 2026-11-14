@@ -580,12 +580,12 @@ impl FileManagerStore {
         let mut failed = false;
         let files: Vec<_> = paths
             .into_iter()
-            .filter_map(|path| match self.create_entry(&path, origin.clone()) {
-                Ok(entry) => Some(entry),
+            .flat_map(|path| match self.create_entries(&path, origin.clone()) {
+                Ok(entries) => entries,
                 Err(error) => {
                     failed = true;
-                    warn!("Failed to create entry for selected file: {error:?}");
-                    None
+                    warn!("Failed to create entries for selected path: {error:?}");
+                    Vec::new()
                 },
             })
             .collect();
@@ -606,10 +606,42 @@ impl FileManagerStore {
         EmbedderControlResponse::FilePicker(Some(files))
     }
 
+    /// Create the entries for a selected path. A selected directory is expanded
+    /// to one entry per file it contains, as if all of its files were selected.
+    ///
+    /// <https://wicg.github.io/entries-api/#html-forms>
+    fn create_entries(
+        &self,
+        path: &Path,
+        origin: ImmutableOrigin,
+    ) -> Result<Vec<SelectedFile>, FileManagerThreadError> {
+        if !path.is_dir() {
+            return self
+                .create_entry(path, origin, None)
+                .map(|entry| vec![entry]);
+        }
+        let root_name = path
+            .file_name()
+            .ok_or(FileManagerThreadError::FileSystemError(
+                "Invalid filepath".to_string(),
+            ))?;
+        walk_directory(path)?
+            .into_iter()
+            .map(|(path, relative_path)| {
+                // A relative path starts from, and includes, the selected directory.
+                let relative_path = Path::new(root_name).join(relative_path);
+                // Paths in the entries API always use "/" as separator.
+                let relative_path = relative_path.to_string_lossy().replace('\\', "/");
+                self.create_entry(&path, origin.clone(), Some(relative_path))
+            })
+            .collect()
+    }
+
     fn create_entry(
         &self,
         file_path: &Path,
         origin: ImmutableOrigin,
+        relative_path: Option<String>,
     ) -> Result<SelectedFile, FileManagerThreadError> {
         use net_traits::filemanager_thread::FileManagerThreadError::FileSystemError;
 
@@ -656,6 +688,7 @@ impl FileManagerStore {
             modified,
             size: file_size,
             type_string,
+            relative_path,
         })
     }
 
@@ -924,4 +957,34 @@ fn set_blob_response_headers(
         headers.typed_insert(content_range);
     }
     headers.typed_insert(ContentType::from(mime));
+}
+
+/// Returns the absolute and relative paths of the regular files under `root`.
+/// Symlinks are skipped so that a selected directory cannot be walked in a cycle.
+fn walk_directory(root: &Path) -> Result<Vec<(PathBuf, PathBuf)>, FileManagerThreadError> {
+    let mut files = Vec::new();
+    let mut directories = vec![PathBuf::new()];
+    while let Some(relative_dir) = directories.pop() {
+        let entries = root
+            .join(&relative_dir)
+            .read_dir()
+            .map_err(|e| FileManagerThreadError::FileSystemError(e.to_string()))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| FileManagerThreadError::FileSystemError(e.to_string()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| FileManagerThreadError::FileSystemError(e.to_string()))?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let relative_path = relative_dir.join(entry.file_name());
+            if file_type.is_dir() {
+                directories.push(relative_path);
+            } else if file_type.is_file() {
+                files.push((entry.path(), relative_path));
+            }
+        }
+    }
+    Ok(files)
 }
